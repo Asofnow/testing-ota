@@ -1,0 +1,67 @@
+name: Firmware OTA Release & Notification
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-and-notify:
+    name: Create Release & Notify FCM Topic
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check firmware.bin existence
+        id: check_firmware
+        run: |
+          if [ ! -f "firmware.bin" ]; then
+            echo "::error file=firmware.bin::firmware.bin not found in repository root!"
+            echo "Please make sure 'firmware.bin' is placed in the root directory before pushing tag ${{ github.ref_name }}."
+            exit 1
+          fi
+          FILE_SIZE=$(stat -c%s firmware.bin)
+          SHA256=$(sha256sum firmware.bin | awk '{print $1}')
+          echo "Firmware file size: $FILE_SIZE bytes"
+          echo "SHA256 Checksum: $SHA256"
+          echo "file_size=$FILE_SIZE" >> $GITHUB_OUTPUT
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: create_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/firmware.bin"
+          gh release create "$TAG" firmware.bin \
+            --title "Firmware Release $TAG" \
+            --notes "### StrideSense Pod Firmware Update $TAG
+          
+          - **File:** \`firmware.bin\`
+          - **Size:** ${{ steps.check_firmware.outputs.file_size }} bytes
+          - **SHA256:** \`${{ steps.check_firmware.outputs.sha256 }}\`
+          - **Direct Download URL:** $DOWNLOAD_URL
+          
+          *This release was published automatically via GitHub Actions.*"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Send FCM Push Notification
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          node .github/scripts/send_firmware_fcm.js
+
