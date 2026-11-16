@@ -1,4 +1,4 @@
-name: Firmware OTA Release & Notification
+name: Firmware & App OTA Release & Notification
 
 on:
   push:
@@ -18,18 +18,31 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Check firmware.bin existence
-        id: check_firmware
+      - name: Locate release asset (.apk or .bin)
+        id: check_asset
         run: |
-          if [ ! -f "firmware.bin" ]; then
-            echo "::error file=firmware.bin::firmware.bin not found in repository root!"
-            echo "Please make sure 'firmware.bin' is placed in the root directory before pushing tag ${{ github.ref_name }}."
+          if [ -f "app-release.apk" ]; then
+            ASSET_FILE="app-release.apk"
+            IS_APK="true"
+          elif ls *.apk 1> /dev/null 2>&1; then
+            ASSET_FILE=$(ls *.apk | head -n 1)
+            IS_APK="true"
+          elif [ -f "firmware.bin" ]; then
+            ASSET_FILE="firmware.bin"
+            IS_APK="false"
+          else
+            echo "::error::Neither *.apk nor firmware.bin found in repository root!"
+            echo "Please make sure 'app-release.apk' or 'firmware.bin' is placed in the root directory before pushing tag ${{ github.ref_name }}."
             exit 1
           fi
-          FILE_SIZE=$(stat -c%s firmware.bin)
-          SHA256=$(sha256sum firmware.bin | awk '{print $1}')
-          echo "Firmware file size: $FILE_SIZE bytes"
-          echo "SHA256 Checksum: $SHA256"
+
+          FILE_SIZE=$(stat -c%s "$ASSET_FILE")
+          SHA256=$(sha256sum "$ASSET_FILE" | awk '{print $1}')
+          echo "Selected release asset: $ASSET_FILE"
+          echo "Size: $FILE_SIZE bytes"
+          echo "SHA256: $SHA256"
+          echo "asset_file=$ASSET_FILE" >> $GITHUB_OUTPUT
+          echo "is_apk=$IS_APK" >> $GITHUB_OUTPUT
           echo "file_size=$FILE_SIZE" >> $GITHUB_OUTPUT
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
 
@@ -39,15 +52,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+          ASSET_FILE: ${{ steps.check_asset.outputs.asset_file }}
+          IS_APK: ${{ steps.check_asset.outputs.is_apk }}
         run: |
-          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/firmware.bin"
-          gh release create "$TAG" firmware.bin \
-            --title "Firmware Release $TAG" \
-            --notes "### StrideSense Pod Firmware Update $TAG
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET_FILE}"
+          TITLE="StrideSense $( [ "$IS_APK" = "true" ] && echo "App Update" || echo "Firmware Release" ) $TAG"
+          gh release create "$TAG" "$ASSET_FILE" \
+            --title "$TITLE" \
+            --notes "### $TITLE
           
-          - **File:** \`firmware.bin\`
-          - **Size:** ${{ steps.check_firmware.outputs.file_size }} bytes
-          - **SHA256:** \`${{ steps.check_firmware.outputs.sha256 }}\`
+          - **File:** \`$ASSET_FILE\`
+          - **Size:** ${{ steps.check_asset.outputs.file_size }} bytes
+          - **SHA256:** \`${{ steps.check_asset.outputs.sha256 }}\`
           - **Direct Download URL:** $DOWNLOAD_URL
           
           *This release was published automatically via GitHub Actions.*"
@@ -62,6 +78,7 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
-        run: |
-          node .github/scripts/send_firmware_fcm.js
-
+          ASSET_FILE: ${{ steps.check_asset.outputs.asset_file }}
+          IS_APK: ${{ steps.check_asset.outputs.is_apk }}
+          FILE_SIZE: ${{ steps.check_asset.outputs.file_size }}
+        run: node .github/scripts/send_firmware_fcm.js

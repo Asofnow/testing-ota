@@ -4,8 +4,7 @@
  * Sends an FCM push notification to the 'firmware-updates' topic
  * using Firebase Cloud Messaging HTTP v1 API.
  *
- * Runs inside the GitHub Actions workflow using standard Node.js (v18+)
- * without requiring any external npm package installations.
+ * Supports both firmware.bin releases and app-release.apk self-updates.
  */
 
 const crypto = require('crypto');
@@ -51,12 +50,11 @@ async function getGoogleOAuth2Token(serviceAccount) {
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
 
-  const jwt = `${signInput}.${signature}`;
+  const assertion = `${signInput}.${signature}`;
 
-  // Exchange JWT for access token
   const tokenRequestBody = new URLSearchParams({
     grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-    assertion: jwt,
+    assertion: assertion,
   }).toString();
 
   return new Promise((resolve, reject) => {
@@ -96,22 +94,30 @@ async function getGoogleOAuth2Token(serviceAccount) {
 /**
  * Sends FCM HTTP v1 Topic Message
  */
-async function sendFcmMessage(serviceAccount, accessToken, tag, downloadUrl, repo) {
+async function sendFcmMessage(serviceAccount, accessToken, tag, downloadUrl, repo, assetFile, isApk, fileSize) {
   const projectId = serviceAccount.project_id;
   const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
+
+  const isAppUpdate = isApk || (assetFile && assetFile.endsWith('.apk'));
+  const title = isAppUpdate ? 'StrideSense App Update' : 'StrideSense Firmware Update';
+  const body = isAppUpdate
+    ? `StrideSense version ${tag} is available with new home screen features! Tap to update.`
+    : `New firmware ${tag} is available for your pod. Tap to download.`;
 
   const payload = {
     message: {
       topic: 'firmware-updates',
       notification: {
-        title: 'StrideSense Firmware Update',
-        body: `New firmware ${tag} is available. Tap to download.`,
+        title,
+        body,
       },
       data: {
-        type: 'firmware_ota',
+        type: isAppUpdate ? 'app_ota' : 'firmware_ota',
         version: tag,
         url: downloadUrl,
-        fileName: 'firmware.bin',
+        fileName: assetFile || 'firmware.bin',
+        isApk: isAppUpdate ? 'true' : 'false',
+        fileSize: fileSize ? String(fileSize) : '',
         repository: repo,
         releasedAt: new Date().toISOString(),
       },
@@ -163,6 +169,9 @@ async function main() {
   const secret = process.env.FIREBASE_SERVICE_ACCOUNT;
   const tag = process.env.TAG || process.env.GITHUB_REF_NAME;
   const repo = process.env.REPO || process.env.GITHUB_REPOSITORY;
+  const assetFile = process.env.ASSET_FILE || 'firmware.bin';
+  const isApk = process.env.IS_APK === 'true' || assetFile.endsWith('.apk');
+  const fileSize = process.env.FILE_SIZE || '';
 
   if (!secret) {
     console.error('ERROR: FIREBASE_SERVICE_ACCOUNT secret is missing or empty!');
@@ -188,13 +197,14 @@ async function main() {
     process.exit(1);
   }
 
-  const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/firmware.bin`;
+  const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/${assetFile}`;
 
   console.log('====================================================');
-  console.log('StrideSense Firmware OTA Release FCM Dispatcher');
+  console.log('StrideSense OTA Release FCM Dispatcher');
   console.log('====================================================');
   console.log(`Repository:    ${repo}`);
   console.log(`Version Tag:   ${tag}`);
+  console.log(`Asset File:    ${assetFile} (isApk: ${isApk})`);
   console.log(`Download URL:  ${downloadUrl}`);
   console.log(`Topic:         firmware-updates`);
   console.log(`Project ID:    ${serviceAccount.project_id}`);
@@ -207,15 +217,14 @@ async function main() {
     console.log('Access token generated successfully.');
 
     console.log('Dispatching FCM topic notification...');
-    const response = await sendFcmMessage(serviceAccount, accessToken, tag, downloadUrl, repo);
+    const response = await sendFcmMessage(serviceAccount, accessToken, tag, downloadUrl, repo, assetFile, isApk, fileSize);
     console.log('FCM Notification delivered successfully!');
     console.log('Message ID:', response.name);
     console.log('All subscribed phones have been notified.');
   } catch (err) {
-    console.error('Failed to send FCM notification:', err);
+    console.error('ERROR delivering FCM notification:', err.message);
     process.exit(1);
   }
 }
 
 main();
-
