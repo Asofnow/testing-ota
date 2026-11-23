@@ -21,18 +21,18 @@ jobs:
       - name: Locate release asset (.apk or .bin)
         id: check_asset
         run: |
-          if [ -f "app-release.apk" ]; then
-            ASSET_FILE="app-release.apk"
-            IS_APK="true"
-          elif ls *.apk 1> /dev/null 2>&1; then
-            ASSET_FILE=$(ls *.apk | head -n 1)
-            IS_APK="true"
+          if [ -f "har.bin" ]; then
+            ASSET_FILE="har.bin"
+            IS_APK="false"
           elif [ -f "firmware.bin" ]; then
             ASSET_FILE="firmware.bin"
             IS_APK="false"
+          elif ls *.apk 1> /dev/null 2>&1; then
+            ASSET_FILE=$(ls *.apk | head -n 1)
+            IS_APK="true"
           else
-            echo "::error::Neither *.apk nor firmware.bin found in repository root!"
-            echo "Please make sure 'app-release.apk' or 'firmware.bin' is placed in the root directory before pushing tag ${{ github.ref_name }}."
+            echo "::error::No firmware *.bin or app *.apk found in repository root!"
+            echo "Please make sure 'har.bin', 'firmware.bin', or an app-release *.apk is present before pushing tag ${{ github.ref_name }}."
             exit 1
           fi
 
